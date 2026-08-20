@@ -1,0 +1,174 @@
+diff --git a/source/dpp/translation/macro_.d b/source/dpp/translation/macro_.d
+index 6ad274a..e463fbb 100644
+--- a/source/dpp/translation/macro_.d
++++ b/source/dpp/translation/macro_.d
+@@ -209,6 +209,7 @@ private MacroTranslation translateToD(
+         .fixSelfCall(cursor, context)
+         .translateGenericCastMacro
+         .fixCasts(cursor, context)
++        .fixCompoundLiterals
+         .fixArrow
+         .fixNull
+         .map!fixLiteralOrPassThrough
+@@ -677,6 +678,161 @@ private auto translateGenericCastMacro(in from!"clang".Token[] tokens) @safe
+     return tokens;
+ }
+ 
++/// Converts C99 compound literals into D struct/array construction syntax.
++///
++/// `fixCasts` turns a C-style type prefix such as `(Color)` into a D cast,
++/// i.e. the three tokens `cast(`, `Color`, `)`. That is correct for a real
++/// cast like `(Color) x`, but when the very next token is `{` the original
++/// C code was not a cast at all: it was a *compound literal*,
++/// `(Color){ 245, 245, 245, 255 }`, which after `fixCasts` becomes the
++/// syntactically invalid `cast(Color){ 245, 245, 245, 255 }`.
++///
++/// This pass looks for exactly that shape - `cast(` TYPE `)` `{` ... `}` -
++/// and rewrites it to the D equivalent `TYPE( ... )`, which for a POD
++/// struct is a valid member-wise constructor call and for an array is a
++/// valid array literal call-syntax. It works for any type name, since the
++/// type was already resolved and translated by `fixCasts`; this pass only
++/// has to notice the `{` where an expression would otherwise be expected.
++///
++/// Deliberately placed immediately after `fixCasts` in the pipeline:
++/// `fixCasts` is the only stage that can turn a bare `(TYPE)` prefix into
++/// `cast(TYPE)` in the first place (it already contains all the context-
++/// and cursor-aware logic - `isType`, user-defined type lookups, macro
++/// parameter handling - needed to decide that `TYPE` really is a type and
++/// not, say, a function-like macro invocation). Re-implementing that
++/// decision here would duplicate `fixCasts` and risk drifting out of sync
++/// with it. By running right after `fixCasts`, this pass gets that
++/// decision for free and only has to handle the one extra bit of
++/// information `fixCasts` does not consider: what token comes
++/// immediately after the closing `)` of the cast it just emitted.
++///
++/// Note: only the *outer* braces of the compound literal are rewritten.
++/// If the initialiser list itself contains further bare `{ ... }` (e.g.
++/// nested aggregate members with no type prefix of their own, as in
++/// `(Color[]){ {1,2,3}, {4,5,6} }`), those inner braces are left as-is,
++/// since deciding what D type they should construct would require
++/// knowledge of the aggregate's member types that isn't available at the
++/// token level. This is a rarer C idiom than the single-level compound
++/// literal and is left as a follow-up rather than blocking this fix.
++private auto fixCompoundLiterals(R)(R tokens) @safe
++{
++    import clang: Token;
++    import std.array: array;
++
++    auto toks = tokens.array;
++    Token[] result;
++    result.reserve(toks.length);
++
++    size_t i = 0;
++    while (i < toks.length) {
++        if (i + 3 < toks.length
++            && toks[i].isPunctuation("cast(")
++            && toks[i + 2].isPunctuation(")")
++            && toks[i + 3].isPunctuation("{"))
++        {
++            const closingBrace = findMatchingBrace(toks, i + 3);
++            if (closingBrace != -1) {
++                result ~= toks[i + 1]; // the (already translated) type name
++                result ~= Token(Token.Kind.Punctuation, "(");
++                result ~= toks[i + 4 .. closingBrace]; // the initialiser list
++                result ~= Token(Token.Kind.Punctuation, ")");
++                i = closingBrace + 1;
++                continue;
++            }
++        }
++
++        result ~= toks[i];
++        ++i;
++    }
++
++    return result;
++}
++
++///
++@("fixCompoundLiterals")
++@safe unittest
++{
++    import unit_threaded: shouldEqual;
++    import clang : Token;
++    import std.algorithm: map;
++    import std.array: join;
++
++    // CLITERAL(Color){ 245, 245, 245, 255 } after fixCasts has already
++    // turned `(Color)` into `cast( Color )`.
++    const tokens = [
++        Token(Token.Kind.Identifier, "CLITERAL"),
++        Token(Token.Kind.Punctuation, "cast("),
++        Token(Token.Kind.Keyword, "Color"),
++        Token(Token.Kind.Punctuation, ")"),
++        Token(Token.Kind.Punctuation, "{"),
++        Token(Token.Kind.Literal, "245"),
++        Token(Token.Kind.Punctuation, ","),
++        Token(Token.Kind.Literal, "245"),
++        Token(Token.Kind.Punctuation, ","),
++        Token(Token.Kind.Literal, "245"),
++        Token(Token.Kind.Punctuation, ","),
++        Token(Token.Kind.Literal, "255"),
++        Token(Token.Kind.Punctuation, "}"),
++    ];
++
++    fixCompoundLiterals(tokens)
++        .map!(t => t.spelling)
++        .join(" ")
++        .shouldEqual("CLITERAL Color ( 245 , 245 , 245 , 255 )");
++}
++
++///
++@("fixCompoundLiterals leaves plain casts alone")
++@safe unittest
++{
++    import unit_threaded: shouldEqual;
++    import clang : Token;
++    import std.algorithm: map;
++    import std.array: join;
++
++    // cast(int)(x) - a real cast, must not be touched
++    const tokens = [
++        Token(Token.Kind.Punctuation, "cast("),
++        Token(Token.Kind.Keyword, "int"),
++        Token(Token.Kind.Punctuation, ")"),
++        Token(Token.Kind.Punctuation, "("),
++        Token(Token.Kind.Identifier, "x"),
++        Token(Token.Kind.Punctuation, ")"),
++    ];
++
++    fixCompoundLiterals(tokens)
++        .map!(t => t.spelling)
++        .join(" ")
++        .shouldEqual("cast( int ) ( x )");
++}
++
++/// Returns: `token index` for the matching closing brace. If no
++/// matching closing brace is found, `-1` is returned.
++private ptrdiff_t findMatchingBrace(
++    const(from!"clang".Token)[] tokens,
++    ptrdiff_t i
++    )
++    @safe
++in (tokens[i].isPunctuation("{"))
++out (r; r == -1
++    || tokens[r].isPunctuation("}"))
++{
++    int depth = 1;
++    while (depth != 0) {
++        ++i;
++        if (i >= tokens.length)
++            break;
++        if(tokens[i].isPunctuation("{"))
++            ++depth;
++        if(tokens[i].isPunctuation("}"))
++            --depth;
++    }
++
++    if (i >= tokens.length)
++        return -1;
++    return i;
++}
++
+ /// Returns: `token index` for the matching closing parentheses. If no
+ /// matching closing parentheses is found, `-1` is returned.
+ private ptrdiff_t findMatchingParentheses(

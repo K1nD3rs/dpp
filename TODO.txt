@@ -1,0 +1,27 @@
+Misc
+  * volatile member functions
+  * Definitions in headers (no code to link to, always inlined)
+    - See clang_Cursor_isFunctionInlined
+
+Classes
+  * Use clang_getTemplateCursorKind to pick between `class` or `struct`
+
+Operators
+  * User-defined literals
+
+Namespaces
+  * Collate all namespaces in order to declare things correctly (nested namespaces)
+  * extern "C" (LinkageSpec in clang - extern(C) inside extern(C++)?)
+
+Inheritance
+  * Translate CXXBaseSpecifier
+  * Use heuristic to pick `struct`, `class`, or `interface`
+  * What to do with multiple inheritance?
+
+Templates
+  * Default template parameters
+  * Methods of template classes (no mangling since not instantiated)
+  * Template template parameters
+  * Function templates
+  * Template specialisation
+  * Class template partial specialisation

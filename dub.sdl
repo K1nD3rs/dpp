@@ -1,0 +1,82 @@
+name "dpp"
+description "Include C/C++ headers directly in D files"
+authors "Atila Neves"
+copyright "Copyright © 2017-2018, Atila Neves"
+license "boost"
+
+targetType "executable"
+targetPath "bin"
+targetName "d++"
+
+dependency "libclang" version="~>0.3.1"
+
+versions "SumTypeNoDefaultCtor"
+
+
+buildType "release" {
+    buildOptions "releaseMode" "optimize" "inline" "debugInfo"
+}
+
+buildType "profilec" {
+    buildOptions "profile" "releaseMode" "optimize" "inline" "debugInfo"
+}
+
+buildType "profile-gc" {
+    buildOptions "profileGC" "releaseMode" "optimize" "inline" "debugInfo"
+}
+
+
+configuration "executable" {
+    dflags "-dip1000"
+    mainSourceFile "source/main.d"
+}
+
+
+configuration "library" {
+    targetType "library"
+    targetName "dpp"
+    excludedSourceFiles "source/main.d"
+}
+
+
+configuration "unittest" {
+    targetName "all_tests"
+    mainSourceFile "tests/test_main.d"
+    sourcePaths "tests"
+    importPaths "tests"
+    excludedSourceFiles "source/main.d" "tests/contract/main.d" "tests/it/main.d"
+    dependency "unit-threaded" version="*"
+}
+
+
+configuration "integration" {
+    targetName "it"
+    mainSourceFile "tests/it/main.d"
+    sourcePaths "tests/it" "tests/common"
+    importPaths "tests"
+
+    excludedSourceFiles "source/main.d"
+    dependency "unit-threaded" version="*"
+}
+
+
+configuration "contract" {
+    targetName "ct"
+    mainSourceFile "tests/contract/main.d"
+    sourcePaths "tests/contract" "tests/common"
+    importPaths "tests"
+
+    excludedSourceFiles "source/main.d"
+    dependency "unit-threaded" version="*"
+}
+
+
+configuration "dpp2" {
+    targetName "dpp2"
+    mainSourceFile "tests/test_main.d"
+    sourcePaths "dpp2/source" "dpp2/tests" "tests"
+    importPaths "dpp2/source" "dpp2/tests" "tests"
+    excludedSourceFiles "source/main.d" "tests/ut/package.d"
+    dependency "unit-threaded" version="*"
+    versions "dpp2"
+}
